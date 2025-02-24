@@ -1,0 +1,184 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+  <title>Collaborative Whiteboard</title>
+  <!-- Socket.IO Client -->
+  <script src="https://cdn.socket.io/4.4.1/socket.io.min.js"></script>
+  <style>
+    body {
+      text-align: center;
+      font-family: sans-serif;
+    }
+    #controls {
+      margin-bottom: 1rem;
+    }
+    canvas {
+      border: 2px solid black;
+      cursor: crosshair;
+      display: block;
+      margin: 0 auto;
+    }
+    button {
+      margin-left: 1rem;
+    }
+    .inline {
+      display: inline-block;
+      margin: 0 1rem;
+    }
+  </style>
+</head>
+
+<body>
+  <h1>Realtime Whiteboard</h1>
+
+  <div id="controls">
+    <!-- Color Picker -->
+    <label for="colorPicker" class="inline">Color:</label>
+    <input
+      type="color"
+      id="colorPicker"
+      value="#000000"
+      onchange="setColor(this.value)"
+      class="inline"
+    />
+
+    <!-- Brush Size Picker -->
+    <label for="brushSize" class="inline">Brush Size:</label>
+    <input
+      type="range"
+      id="brushSize"
+      min="1"
+      max="30"
+      value="5"
+      oninput="setBrushSize(this.value)"
+      class="inline"
+    />
+    <span id="brushSizeLabel" class="inline">5</span>
+
+    <!-- Clear Board Button -->
+    <button onclick="clearBoard()">Clear Board</button>
+  </div>
+
+  <canvas id="whiteboard" width="800" height="500"></canvas>
+
+  <script>
+  
+    const socket = io("http://localhost:3000"); // Connect to your Socket.IO server
+    const canvas = document.getElementById("whiteboard");
+    const ctx = canvas.getContext("2d");
+
+    // Default color and brush size
+    let currentColor = "#000000";
+    let currentBrushSize = 5;
+
+    // Track if drawing
+    let drawing = false;
+
+ 
+    function setColor(newColor) {
+      currentColor = newColor;
+    }
+    function setBrushSize(newSize) {
+      currentBrushSize = parseInt(newSize, 10);
+      document.getElementById("brushSizeLabel").textContent = newSize;
+    }
+
+    function startDrawing(event) {
+      drawing = true;
+      // Locally begin a new path
+      ctx.beginPath();
+      // Notify all clients to begin a new path
+      socket.emit("beginPath");
+      // Draw the initial point in case we want a dot
+      draw(event);
+    }
+
+    function stopDrawing() {
+      drawing = false;
+      ctx.beginPath(); // Reset the context path locally
+    }
+
+    function draw(event) {
+      if (!drawing) return;
+
+      // Calculate canvas-relative coordinates
+      const rect = canvas.getBoundingClientRect();
+      const x = event.clientX - rect.left;
+      const y = event.clientY - rect.top;
+
+      // Local draw
+      ctx.lineWidth = currentBrushSize;
+      ctx.lineCap = "round";
+      ctx.strokeStyle = currentColor;
+
+      ctx.lineTo(x, y);
+      ctx.stroke();
+      ctx.beginPath();
+      ctx.moveTo(x, y);
+
+      // Send drawing data to server
+      socket.emit("draw", {
+        x,
+        y,
+        color: currentColor,
+        brushSize: currentBrushSize
+      });
+    }
+
+    // Clear the board locally & notify others
+    function clearBoard() {
+      ctx.clearRect(0, 0, canvas.width, canvas.height);
+      socket.emit("clear");
+    }
+
+
+    // 1) Another user began a new path
+    socket.on("beginPath", () => {
+      ctx.beginPath();
+    });
+
+    // 2) Another user drew a stroke
+    socket.on("draw", (data) => {
+      ctx.lineWidth = data.brushSize;
+      ctx.lineCap = "round";
+      ctx.strokeStyle = data.color;
+
+      ctx.lineTo(data.x, data.y);
+      ctx.stroke();
+      ctx.beginPath();
+      ctx.moveTo(data.x, data.y);
+    });
+
+    // 3) Another user cleared the board
+    socket.on("clear", () => {
+      ctx.clearRect(0, 0, canvas.width, canvas.height);
+    });
+
+    // 4) When we join, load the entire board state
+    socket.on("loadBoard", (boardState) => {
+      // boardState is an array of events
+      boardState.forEach((evt) => {
+        if (evt.type === "beginPath") {
+          ctx.beginPath();
+        } else if (evt.type === "draw") {
+          ctx.lineWidth = evt.brushSize;
+          ctx.lineCap = "round";
+          ctx.strokeStyle = evt.color;
+          ctx.lineTo(evt.x, evt.y);
+          ctx.stroke();
+          ctx.beginPath();
+          ctx.moveTo(evt.x, evt.y);
+        } else if (evt.type === "clear") {
+          ctx.clearRect(0, 0, canvas.width, canvas.height);
+        }
+      });
+    });
+
+    canvas.addEventListener("mousedown", startDrawing);
+    canvas.addEventListener("mouseup", stopDrawing);
+    canvas.addEventListener("mousemove", draw);
+  </script>
+</body>
+</html>
